@@ -1,5 +1,15 @@
 # Handoff
 
+## Update 2026-10-13: UI refresh + rate-limit mitigation
+- `evaluator/llm.py`: replaced `parse_resume` + `score_match` with a single
+  `evaluate_resume(job, resume_text)` — one LLM call per resume instead of two.
+- `app.py`: cached per-resume evaluation (`@st.cache_data` on JD + file bytes);
+  removed the free-tier "tip"; friendlier UI — best-match callout, stat tiles
+  (resumes/top/avg), ranked table with score progress bars + medals + ✅/❌ experience,
+  bordered per-candidate detail cards, Evaluate disabled until inputs present.
+- Tests still green (11 passed); headless app boots (HTTP 200).
+- Net API calls per batch of N: `1 + N` (was `1 + 2N`), and `0` extra on identical re-run.
+
 ## Status: v1 built, verified locally, not yet deployed
 
 ### Done

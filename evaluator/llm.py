@@ -14,7 +14,7 @@ from groq import Groq
 from pydantic import BaseModel, ValidationError
 
 from .config import BACKOFF_BASE_SECONDS, MAX_RETRIES, MODEL, get_api_key
-from .models import JobD, MatchResult, Resume
+from .models import JobD, MatchResult
 
 
 class LLMError(RuntimeError):
@@ -88,64 +88,46 @@ IMPORTANT:
     return _parse_into(raw, JobD)  # type: ignore[return-value]
 
 
-def parse_resume(resume_text: str) -> Resume:
-    """Extract structured fields from resume text."""
-    schema = Resume.model_json_schema()
-    system_prompt = f"""
-You are an expert resume parser. Extract information based on meaning, not just
-exact headings. Experience may appear under "Experience", "Work History",
-"Employment", "Internships", etc. Skills may appear in a skills section, work
-experience, internships, or projects.
+def evaluate_resume(job: JobD, resume_text: str) -> MatchResult:
+    """Read a resume and score it against the job description in one LLM call.
 
-Return ONLY valid JSON matching this schema:
-
-{schema}
-
-Rules:
-1. Do not invent information.
-2. If a value is not available, return null.
-3. If a list has no information, return an empty list.
-4. Include internships inside experiences.
-5. Extract skills mentioned across the entire resume.
-"""
-    user_prompt = f"Parse the following resume:\n\n{resume_text}"
-    raw = _chat_json(
-        [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ]
-    )
-    return _parse_into(raw, Resume)  # type: ignore[return-value]
-
-
-def score_match(job: JobD, resume: Resume) -> MatchResult:
-    """Score a resume against a job description."""
+    Combining the old parse + score steps into a single request halves the
+    number of API calls per resume (easier on the Groq free-tier limit).
+    """
     schema = MatchResult.model_json_schema()
-    prompt = f"""
-You are an HR recruiter. Compare the candidate's resume with the job description.
-
-JOB DESCRIPTION:
-{job.model_dump_json(indent=2)}
-
-CANDIDATE RESUME:
-{resume.model_dump_json(indent=2)}
+    system_prompt = f"""
+You are an expert HR recruiter. You are given a structured job description and the
+raw text of one candidate's resume. Read the resume (skills may appear anywhere:
+a skills section, work experience, internships, or projects; include internships
+as experience) and compare it against the job description.
 
 Return ONLY valid JSON matching this schema:
 
 {schema}
 
 Fill it with:
-- candidate_name: the candidate's name (from the resume).
+- candidate_name: the candidate's name, taken from the resume.
 - matching_skills: required/preferred skills the candidate clearly has.
 - missing_skills: important required skills the candidate lacks.
 - experience_met: true if the experience requirement is met, else false.
 - score: overall match percentage from 0 to 100.
 - verdict: one or two concise sentences summarizing the fit.
 
-Do not return the schema itself.
+Rules:
+- Do not invent information; judge only from the resume text.
+- Do not return the schema itself (no "properties"/"title"/"type" keys).
 """
-    raw = _chat_json([{"role": "user", "content": prompt}])
-    result = _parse_into(raw, MatchResult)
-    if not result.candidate_name and resume.name:  # type: ignore[attr-defined]
-        result.candidate_name = resume.name  # type: ignore[attr-defined]
-    return result  # type: ignore[return-value]
+    user_prompt = f"""
+JOB DESCRIPTION:
+{job.model_dump_json(indent=2)}
+
+CANDIDATE RESUME (raw text):
+{resume_text}
+"""
+    raw = _chat_json(
+        [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+    )
+    return _parse_into(raw, MatchResult)  # type: ignore[return-value]
